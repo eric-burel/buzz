@@ -34,6 +34,7 @@ class CommandLineModelType(enum.Enum):
     HUGGING_FACE = "huggingface"
     FASTER_WHISPER = "fasterwhisper"
     OPEN_AI_WHISPER_API = "openaiapi"
+    KYUTAI = "kyutai"
 
 
 class CommandLineDiarizer(enum.Enum):
@@ -78,7 +79,7 @@ def _add_command_options(parser: QCommandLineParser):
     )
     hugging_face_model_id_option = QCommandLineOption(
         ["hfid"],
-        'Hugging Face model ID. Use only when --model-type is huggingface. Example: "openai/whisper-tiny"',
+        'Hugging Face model ID. Use with --model-type huggingface or kyutai. Example: "openai/whisper-tiny"',
         "id",
     )
     custom_model_id_option = QCommandLineOption(
@@ -180,8 +181,11 @@ def _resolve_model(
     hugging_face_model_id: str,
     custom_model_id: str = "",
 ):
-    if hugging_face_model_id == "" and model_type == CommandLineModelType.HUGGING_FACE:
-        raise CommandLineError("--hfid is required when --model-type is huggingface")
+    if hugging_face_model_id == "" and model_type in (
+        CommandLineModelType.HUGGING_FACE,
+        CommandLineModelType.KYUTAI,
+    ):
+        raise CommandLineError("--hfid is required for Hugging Face and Kyutai models")
     model = TranscriptionModel(
         model_type=ModelType[model_type.name],
         whisper_model_size=model_size,

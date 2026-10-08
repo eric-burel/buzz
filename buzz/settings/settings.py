@@ -56,6 +56,7 @@ class Settings:
         OPENAI_API_MODEL = "transcriber/openai-api-model"
         CUSTOM_FASTER_WHISPER_ID = "transcriber/custom-faster-whisper-id"
         HUGGINGFACE_MODEL_ID = "transcriber/huggingface-model-id"
+        KYUTAI_MODEL_ID = "transcriber/kyutai-model-id"
 
         SHORTCUTS = "shortcuts"
 
@@ -121,6 +122,11 @@ class Settings:
                     Settings.Key.HUGGINGFACE_MODEL_ID,
                     model.hugging_face_model_id,
                 )
+            case ModelType.KYUTAI:
+                self.set_value(
+                    Settings.Key.KYUTAI_MODEL_ID,
+                    model.hugging_face_model_id,
+                )
 
     def load_custom_model_id(self, model) -> str:
         from buzz.model_loader import ModelType
@@ -135,6 +141,14 @@ class Settings:
                     Settings.Key.HUGGINGFACE_MODEL_ID,
                     "",
                 )
+            case ModelType.KYUTAI:
+                model_id = self.value(
+                    Settings.Key.KYUTAI_MODEL_ID,
+                    "kyutai/stt-1b-en_fr",
+                )
+                if model_id in ("kyutai/stt-1b-en_fr", "kyutai/stt-2.6b-en"):
+                    return model_id
+                return "kyutai/stt-1b-en_fr"
 
         return ""
 

@@ -2,6 +2,8 @@ import enum
 import hashlib
 import logging
 import multiprocessing
+import importlib.util
+import json
 import os
 import queue
 import shutil
@@ -181,6 +183,7 @@ class ModelType(enum.Enum):
     FASTER_WHISPER = "Faster Whisper"
     WHISPER = "OpenAI Whisper"
     OPEN_AI_WHISPER_API = "OpenAI Whisper API"
+    KYUTAI = "Kyutai STT"
 
     @classmethod
     def _missing_(cls, value):
@@ -208,6 +211,8 @@ class ModelType(enum.Enum):
                 and platform.system() == "Darwin" and platform.machine() == "x86_64")
         ):
             return False
+        if self == ModelType.KYUTAI:
+            return importlib.util.find_spec("moshi") is not None
         return True
 
     def is_manually_downloadable(self):
@@ -215,6 +220,7 @@ class ModelType(enum.Enum):
             ModelType.WHISPER,
             ModelType.WHISPER_CPP,
             ModelType.FASTER_WHISPER,
+            ModelType.KYUTAI,
         )
 
 
@@ -237,6 +243,42 @@ HUGGING_FACE_MODEL_ALLOW_PATTERNS = [
     "tokenizer_config.json",
     "vocab.json",
 ]
+
+KYUTAI_MODEL_IDS = (
+    "kyutai/stt-1b-en_fr",
+    "kyutai/stt-2.6b-en",
+)
+
+KYUTAI_MODEL_ALLOW_PATTERNS = [
+    "config.json",
+    "model.safetensors",
+    "mimi-*.safetensors",
+    "tokenizer*.model",
+]
+
+
+def _kyutai_model_files(model_path: str) -> Optional[Tuple[str, ...]]:
+    """Return required model files from a Kyutai snapshot's config."""
+    try:
+        with open(os.path.join(model_path, "config.json"), encoding="utf-8") as config_file:
+            config = json.load(config_file)
+    except (OSError, ValueError):
+        return None
+
+    files = (
+        config.get("moshi_name", "model.safetensors"),
+        config.get("mimi_name", "tokenizer-e351c8d8-checkpoint125.safetensors"),
+        config.get("tokenizer_name", "tokenizer_spm_32k_3.model"),
+    )
+    if not all(
+        isinstance(filename, str)
+        and filename
+        and os.path.basename(filename) == filename
+        for filename in files
+    ):
+        return None
+    return ("config.json", *files)
+
 
 # MMS models use different patterns - adapters are downloaded on-demand by transformers
 MMS_MODEL_ALLOW_PATTERNS = [
@@ -433,7 +475,10 @@ class TranscriptionModel:
     ):
         self.model_type = model_type
         self.whisper_model_size = whisper_model_size
-        self.hugging_face_model_id = hugging_face_model_id
+        self.hugging_face_model_id = (
+            hugging_face_model_id
+            or ("kyutai/stt-1b-en_fr" if model_type == ModelType.KYUTAI else "")
+        )
         # Identifies which registered Whisper.cpp custom model this refers to when
         # whisper_model_size is CUSTOM. None means the legacy single custom model,
         # so objects persisted by older versions keep working unchanged.
@@ -451,6 +496,8 @@ class TranscriptionModel:
                 return f"Faster Whisper ({self.whisper_model_size})"
             case ModelType.OPEN_AI_WHISPER_API:
                 return "OpenAI Whisper API"
+            case ModelType.KYUTAI:
+                return f"Kyutai STT ({self.hugging_face_model_id})"
             case _:
                 raise Exception("Unknown model type")
 
@@ -459,13 +506,16 @@ class TranscriptionModel:
             self.model_type == ModelType.WHISPER
             or self.model_type == ModelType.WHISPER_CPP
             or self.model_type == ModelType.FASTER_WHISPER
+            or self.model_type == ModelType.KYUTAI
         ) and self.get_local_model_path() is not None
 
     def open_file_location(self):
         model_path = self.get_local_model_path()
 
-        if (self.model_type == ModelType.HUGGING_FACE
+        if (self.model_type in (ModelType.HUGGING_FACE, ModelType.KYUTAI)
                 or self.model_type == ModelType.FASTER_WHISPER):
+            if model_path is None:
+                return
             model_path = os.path.dirname(model_path)
 
         if model_path is None:
@@ -508,7 +558,7 @@ class TranscriptionModel:
     def delete_local_file(self):
         model_path = self.get_local_model_path()
 
-        if self.model_type in (ModelType.HUGGING_FACE,
+        if self.model_type in (ModelType.HUGGING_FACE, ModelType.KYUTAI,
                                ModelType.FASTER_WHISPER):
             # Go up two directories to get the huggingface cache root for this model
             # Structure: models--repo--name/snapshots/xxx/files
@@ -622,6 +672,27 @@ class TranscriptionModel:
             except (ValueError, FileNotFoundError):
                 return None
             if not _snapshot_is_complete(snapshot_path):
+                return None
+            return snapshot_path
+
+        if self.model_type == ModelType.KYUTAI:
+            if self.hugging_face_model_id not in KYUTAI_MODEL_IDS:
+                return None
+            try:
+                snapshot_path = huggingface_hub.snapshot_download(
+                    self.hugging_face_model_id,
+                    allow_patterns=KYUTAI_MODEL_ALLOW_PATTERNS,
+                    local_files_only=True,
+                    cache_dir=model_root_dir,
+                    etag_timeout=60,
+                )
+            except (ValueError, FileNotFoundError, LocalEntryNotFoundError):
+                return None
+            required_files = _kyutai_model_files(snapshot_path)
+            if not _snapshot_is_complete(snapshot_path) or required_files is None or not all(
+                os.path.isfile(os.path.join(snapshot_path, filename))
+                for filename in required_files
+            ):
                 return None
             return snapshot_path
 
@@ -1015,6 +1086,32 @@ class ModelDownloader(QRunnable):
 
         self.signals.finished.emit(model_path)
 
+    def _download_kyutai(self) -> None:
+        if self.model.hugging_face_model_id not in KYUTAI_MODEL_IDS:
+            self.signals.error.emit(_("Unsupported Kyutai STT model"))
+            return
+
+        model_path = download_from_huggingface(
+            self.model.hugging_face_model_id,
+            allow_patterns=KYUTAI_MODEL_ALLOW_PATTERNS,
+            progress=self.signals.progress,
+            on_process=self._register_process,
+        )
+        if self.stopped:
+            return
+        if model_path == "":
+            self.signals.error.emit(_("Error"))
+            return
+
+        required_files = _kyutai_model_files(model_path)
+        if required_files is None or not all(
+            os.path.isfile(os.path.join(model_path, filename))
+            for filename in required_files
+        ):
+            self.signals.error.emit(_("Downloaded Kyutai model is missing required files"))
+            return
+        self.signals.finished.emit(model_path)
+
     def _download_openai_whisper_api(self) -> None:
         self.signals.finished.emit("")
 
@@ -1030,6 +1127,8 @@ class ModelDownloader(QRunnable):
             self._download_faster_whisper()
         elif self.model.model_type == ModelType.HUGGING_FACE:
             self._download_hugging_face()
+        elif self.model.model_type == ModelType.KYUTAI:
+            self._download_kyutai()
         elif self.model.model_type == ModelType.OPEN_AI_WHISPER_API:
             self._download_openai_whisper_api()
         else:

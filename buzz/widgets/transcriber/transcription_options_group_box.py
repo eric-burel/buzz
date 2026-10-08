@@ -9,7 +9,13 @@ from PyQt6.QtWidgets import QGroupBox, QWidget, QFormLayout, QComboBox, QLabel, 
 from buzz.locale import _
 from buzz.settings.settings import Settings
 from buzz.widgets.icon import INFO_ICON_PATH
-from buzz.model_loader import ModelType, WhisperModelSize, model_root_dir, is_mms_model
+from buzz.model_loader import (
+    ModelType,
+    WhisperModelSize,
+    model_root_dir,
+    is_mms_model,
+    KYUTAI_MODEL_IDS,
+)
 from buzz.settings.whisper_cpp_custom_models import get_custom_models
 from buzz.transcriber.transcriber import TranscriptionOptions, Task
 from buzz.widgets.model_type_combo_box import ModelTypeComboBox
@@ -170,7 +176,7 @@ class TranscriptionOptionsGroupBox(QGroupBox):
         model_type = self.transcription_options.model.model_type
         whisper_model_size = self.transcription_options.model.whisper_model_size
 
-        if (model_type == ModelType.HUGGING_FACE
+        if (model_type in (ModelType.HUGGING_FACE, ModelType.KYUTAI)
             or (whisper_model_size == WhisperModelSize.CUSTOM
                 and model_type == ModelType.FASTER_WHISPER)):
             self.transcription_options.model.hugging_face_model_id = (
@@ -183,7 +189,7 @@ class TranscriptionOptionsGroupBox(QGroupBox):
             (model_type == ModelType.HUGGING_FACE)
             or (model_type == ModelType.FASTER_WHISPER
                 and whisper_model_size == WhisperModelSize.CUSTOM),
-            )
+        )
 
         self._populate_whisper_model_size_combo_box()
 
@@ -191,19 +197,31 @@ class TranscriptionOptionsGroupBox(QGroupBox):
             self.whisper_model_size_combo_box,
             (model_type == ModelType.WHISPER)
             or (model_type == ModelType.WHISPER_CPP)
-            or (model_type == ModelType.FASTER_WHISPER),
+            or (model_type == ModelType.FASTER_WHISPER)
+            or (model_type == ModelType.KYUTAI),
         )
         if self.whisper_model_size_layout is not None:
             self.form_layout.setRowVisible(
                 self.whisper_model_size_layout,
                 (model_type == ModelType.WHISPER)
                 or (model_type == ModelType.WHISPER_CPP)
-                or (model_type == ModelType.FASTER_WHISPER),
+                or (model_type == ModelType.FASTER_WHISPER)
+                or (model_type == ModelType.KYUTAI),
             )
 
         self.form_layout.setRowVisible(
             self.openai_access_token_edit, model_type == ModelType.OPEN_AI_WHISPER_API
         )
+        self.form_layout.setRowVisible(
+            self.tasks_combo_box, model_type != ModelType.KYUTAI
+        )
+        if model_type == ModelType.KYUTAI:
+            self.transcription_options.task = Task.TRANSCRIBE
+            self.tasks_combo_box.blockSignals(True)
+            self.tasks_combo_box.setCurrentIndex(
+                self.tasks_combo_box.tasks.index(Task.TRANSCRIBE)
+            )
+            self.tasks_combo_box.blockSignals(False)
 
         # Note on Apple Silicon Macs
         if self.load_note_tooltip_icon is not None:
@@ -222,6 +240,10 @@ class TranscriptionOptionsGroupBox(QGroupBox):
         if (self.transcription_options.model.whisper_model_size == WhisperModelSize.LUMII
                 and model_type != ModelType.WHISPER_CPP):
             self.transcription_options.model.whisper_model_size = WhisperModelSize.LARGEV3TURBO
+        if model_type == ModelType.KYUTAI:
+            self.transcription_options.model.hugging_face_model_id = (
+                self.settings.load_custom_model_id(self.transcription_options.model)
+            )
 
         self.reset_visible_rows()
         self.transcription_options_changed.emit(self.transcription_options)
@@ -238,6 +260,16 @@ class TranscriptionOptionsGroupBox(QGroupBox):
 
         combo.blockSignals(True)
         combo.clear()
+
+        if model_type == ModelType.KYUTAI:
+            for model_id in KYUTAI_MODEL_IDS:
+                combo.addItem(model_id.rsplit("/", 1)[-1], model_id)
+            selected_index = combo.findData(
+                self.transcription_options.model.hugging_face_model_id
+            )
+            combo.setCurrentIndex(max(selected_index, 0))
+            combo.blockSignals(False)
+            return
 
         for size in WhisperModelSize:
             if size in {WhisperModelSize.CUSTOM, WhisperModelSize.LUMII}:
@@ -284,6 +316,12 @@ class TranscriptionOptionsGroupBox(QGroupBox):
         data = self.whisper_model_size_combo_box.currentData()
         if data is None:
             return
+        if self.transcription_options.model.model_type == ModelType.KYUTAI:
+            self.transcription_options.model.hugging_face_model_id = data
+            self.settings.save_custom_model_id(self.transcription_options.model)
+            self._update_language_widget_visibility()
+            self.transcription_options_changed.emit(self.transcription_options)
+            return
         model_size, custom_model_id = data
         self.transcription_options.model.whisper_model_size = model_size
         self.transcription_options.model.custom_model_id = custom_model_id
@@ -308,6 +346,11 @@ class TranscriptionOptionsGroupBox(QGroupBox):
 
         # Check if this is an MMS model
         is_mms = (model_type == ModelType.HUGGING_FACE and is_mms_model(model_id))
+        kyutai_languages = {
+            "kyutai/stt-1b-en_fr": {"", "en", "fr"},
+            "kyutai/stt-2.6b-en": {"", "en"},
+        }.get(model_id) if model_type == ModelType.KYUTAI else None
+        self.languages_combo_box.set_supported_languages(kyutai_languages)
 
         # Show MMS language input for MMS models, show dropdown for others
         self.form_layout.setRowVisible(self.mms_language_line_edit, is_mms)

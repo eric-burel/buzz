@@ -257,6 +257,10 @@ class WhisperFileTranscriber(FileTranscriber):
                     sys.stderr.write("0%\n")
                     segments = cls.transcribe_hugging_face(task)
                     sys.stderr.write("100%\n")
+                elif task.transcription_options.model.model_type == ModelType.KYUTAI:
+                    sys.stderr.write("0%\n")
+                    segments = cls.transcribe_kyutai(task)
+                    sys.stderr.write("100%\n")
                 elif (
                     task.transcription_options.model.model_type == ModelType.FASTER_WHISPER
                 ):
@@ -324,6 +328,12 @@ class WhisperFileTranscriber(FileTranscriber):
             )
             for segment in result.get("segments")
         ]
+
+    @classmethod
+    def transcribe_kyutai(cls, task: FileTranscriptionTask) -> List[Segment]:
+        from buzz.transcriber.kyutai import KyutaiTranscriber
+
+        return KyutaiTranscriber.transcribe(task)
 
     @classmethod
     def transcribe_faster_whisper(cls, task: FileTranscriptionTask) -> List[Segment]:

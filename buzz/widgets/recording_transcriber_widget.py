@@ -118,7 +118,7 @@ class RecordingTranscriberWidget(QWidget):
         model_types = [
             model_type
             for model_type in ModelType
-            if model_type.is_available()
+            if model_type.is_available() and model_type != ModelType.KYUTAI
         ]
         return model_types, default_language
 

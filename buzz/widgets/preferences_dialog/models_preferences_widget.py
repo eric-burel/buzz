@@ -26,6 +26,7 @@ from buzz.model_loader import (
     ModelDownloader,
     model_root_dir,
     get_whisper_cpp_custom_model_path,
+    KYUTAI_MODEL_IDS,
 )
 from buzz.settings.settings import Settings
 from buzz.settings.whisper_cpp_custom_models import (
@@ -196,6 +197,12 @@ class ModelsPreferencesWidget(QWidget):
         item_data = current.data(0, Qt.ItemDataRole.UserRole)
         if item_data is None:
             return
+        if self.model.model_type == ModelType.KYUTAI:
+            self.model.hugging_face_model_id = item_data
+            self.settings.save_custom_model_id(self.model)
+            self.reset()
+            return
+
         # Item data is a (WhisperModelSize, custom_model_id) tuple.
         model_size, custom_model_id = item_data
         self.model.whisper_model_size = model_size
@@ -229,7 +236,9 @@ class ModelsPreferencesWidget(QWidget):
         self.model_list_widget.setHeaderHidden(True)
         self.model_list_widget.setAlternatingRowColors(True)
 
-        self.model.hugging_face_model_id = self.settings.load_custom_model_id(self.model)
+        stored_model_id = self.settings.load_custom_model_id(self.model)
+        if stored_model_id:
+            self.model.hugging_face_model_id = stored_model_id
         self.custom_model_id_input.setText(self.model.hugging_face_model_id)
 
         # Faster Whisper custom model input (Hugging Face id)
@@ -242,6 +251,11 @@ class ModelsPreferencesWidget(QWidget):
             )
         else:
             self.custom_model_id_input.hide()
+
+        self.custom_model_id_input.setVisible(
+            self.model.whisper_model_size == WhisperModelSize.CUSTOM
+            and self.model.model_type == ModelType.FASTER_WHISPER
+        )
 
         # Whisper.cpp custom model inputs (name + local file / URL)
         if self._is_whisper_cpp():
@@ -263,6 +277,23 @@ class ModelsPreferencesWidget(QWidget):
         self._populate_model_list(downloaded_item, available_item)
 
     def _populate_model_list(self, downloaded_item, available_item):
+        if self.model.model_type == ModelType.KYUTAI:
+            for model_id in KYUTAI_MODEL_IDS:
+                model = TranscriptionModel(
+                    model_type=ModelType.KYUTAI,
+                    hugging_face_model_id=model_id,
+                )
+                parent = (
+                    downloaded_item
+                    if model.get_local_model_path() is not None
+                    else available_item
+                )
+                item = QTreeWidgetItem(parent)
+                item.setText(0, model_id.rsplit("/", 1)[-1])
+                item.setData(0, Qt.ItemDataRole.UserRole, model_id)
+                item.setSelected(model_id == self.model.hugging_face_model_id)
+            return
+
         for model_size in WhisperModelSize:
             # Skip custom size for OpenAI Whisper
             if (self.model.model_type == ModelType.WHISPER and
@@ -320,6 +351,10 @@ class ModelsPreferencesWidget(QWidget):
     def on_model_type_changed(self, model_type: ModelType):
         self.model.model_type = model_type
         self.model.custom_model_id = None
+        if model_type == ModelType.KYUTAI:
+            self.model.hugging_face_model_id = self.settings.load_custom_model_id(
+                self.model
+            )
         self.reset()
 
     def on_custom_model_id_input_changed(self, text):

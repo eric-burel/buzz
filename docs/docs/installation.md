@@ -52,6 +52,25 @@ sudo apt-get install --no-install-recommends libyaml-dev libtbb-dev libxkbcommon
 ```
 On versions prior to Ubuntu 24.04 install `sudo apt-get install --no-install-recommends libegl1-mesa`
 
+## Kyutai STT (source installation)
+
+Kyutai support is an optional source-install extra. From the Buzz repository,
+install it with:
+
+```shell
+uv sync --extra kyutai
+```
+
+Restart Buzz; Kyutai STT will then be available for file transcription under
+Preferences > Models. Buzz supports the English/French `kyutai/stt-1b-en_fr`
+model and the English-only `kyutai/stt-2.6b-en` model. The models are several
+gigabytes and are downloaded on demand. The PyTorch implementation uses CUDA
+when available and falls back to CPU; CPU transcription can be very slow.
+
+The initial integration supports file transcription only. Kyutai does not
+support Buzz's translation task. Live microphone streaming, semantic VAD, and
+prebuilt Buzz installers are not included yet.
+
 
 ## CUDA GPU Acceleration
 

@@ -2,6 +2,7 @@ import platform
 
 import pytest
 
+from buzz.model_loader import ModelType
 from buzz.widgets.model_type_combo_box import ModelTypeComboBox
 
 
@@ -30,6 +31,8 @@ class TestModelTypeComboBox:
         widget = ModelTypeComboBox()
         qtbot.add_widget(widget)
 
+        if ModelType.KYUTAI.is_available():
+            model_types.append(ModelType.KYUTAI.value)
         assert widget.count() == len(model_types)
         for index, model_type in enumerate(model_types):
             assert widget.itemText(index) == model_type
