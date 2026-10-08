@@ -419,6 +419,20 @@ class TestFileTranscriberQueueWorkerRun:
 
             assert isinstance(simple_worker.current.transcriber, WhisperFileTranscriber)
 
+    def test_run_creates_whisper_transcriber_for_kyutai(self, simple_worker, qapp):
+        task = self._make_task(model_type=ModelType.KYUTAI)
+        simple_worker.tasks_queue.put(task)
+
+        with unittest.mock.patch.object(WhisperFileTranscriber, "run"), \
+             unittest.mock.patch.object(WhisperFileTranscriber, "moveToThread"), \
+             unittest.mock.patch("buzz.file_transcriber_queue_worker.QThread") as mock_thread_class:
+            mock_thread = unittest.mock.MagicMock()
+            mock_thread_class.return_value = mock_thread
+
+            simple_worker.run()
+
+            assert isinstance(simple_worker.current.transcriber, WhisperFileTranscriber)
+
     def test_run_speech_extraction_failure_emits_error(self, simple_worker, qapp):
         task = self._make_task(extract_speech=True)
         simple_worker.trigger_run.disconnect(simple_worker.run)
