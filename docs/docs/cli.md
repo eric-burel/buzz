@@ -16,14 +16,14 @@ Options:
   -t, --task <task>              The task to perform. Allowed: translate,
                                  transcribe. Default: transcribe.
   -m, --model-type <model-type>  Model type. Allowed: whisper, whispercpp,
-                                 huggingface, fasterwhisper, openaiapi. Default:
-                                 whisper.
+                                 huggingface, fasterwhisper, openaiapi, kyutai.
+                                 Default: whisper.
   -s, --model-size <model-size>  Model size. Use only when --model-type is
                                  whisper, whispercpp, or fasterwhisper. Allowed:
                                  tiny, base, small, medium, large. Default:
                                  tiny.
-  --hfid <id>                    Hugging Face model ID. Use only when
-                                 --model-type is huggingface. Example:
+  --hfid <id>                    Hugging Face model ID. Use with --model-type
+                                 huggingface or kyutai. Example:
                                  "openai/whisper-tiny"
   -l, --language <code>          Language code. Allowed: af (Afrikaans), am
                                  (Amharic), ar (Arabic), as (Assamese), az
@@ -77,6 +77,8 @@ Options:
   --srt                          Output result in an SRT file.
   --vtt                          Output result in a VTT file.
   --txt                          Output result in a TXT file.
+  --stream                       Print Kyutai transcript text to stdout as it
+                                 is generated. Use only with --model-type kyutai.
   --hide-gui                     Hide the main application window.
   -h, --help                     Displays help on commandline options.
   --help-all                     Displays help including Qt specific options.
@@ -104,6 +106,9 @@ buzz add --task translate --language fr --model-type openaiapi meeting-fr.mp3
 
 # Transcribe a video with the Whisper.cpp "small" model, exporting SRT and VTT subtitles
 buzz add --model-type whispercpp --model-size small --srt --vtt presentation.mp4
+
+# Stream generated Kyutai transcript text to stdout while also saving a TXT file
+buzz add --model-type kyutai --hfid kyutai/stt-2.6b-en --stream --txt meeting.wav
 
 # Transcribe an interview and label each speaker in the transcript.
 # Speaker identification options available since version 1.4.6

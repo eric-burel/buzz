@@ -216,6 +216,7 @@ class FileTranscriptionTask:
     url: Optional[str] = None
     display_name: Optional[str] = None
     fraction_downloaded: float = 0.0
+    stream_transcript: bool = False
 
     def __post_init__(self):
         # Ensure shared UI settings do not affect queued task

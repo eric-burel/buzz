@@ -1,7 +1,7 @@
 import json
 import os
 import itertools
-from typing import List
+from typing import Callable, List
 
 from buzz.model_loader import _kyutai_model_files
 from buzz.transcriber.transcriber import FileTranscriptionTask, Segment, Task
@@ -21,31 +21,18 @@ def _timestamped_words(
     (boundaries,) = torch.where(text_tokens == 0)
     results = []
 
-    def timestamp(start: int, end: int) -> tuple[float, float]:
-        return (
-            max(0.0, start / frame_rate - offset_seconds),
-            max(0.0, end / frame_rate - offset_seconds),
-        )
-
     def decode(start: int, end: int) -> None:
-        token_ids = text_tokens[start:end]
-        token_ids = token_ids[token_ids > padding_token_id]
-        words = tokenizer.decode(token_ids.tolist()).split()
-        if not words:
-            return
-        if len(words) == 1:
-            start_time, end_time = timestamp(start, end)
-            results.append((words[0], start_time, end_time))
-            return
-
-        cursor = start
-        for word in words[:-1]:
-            word_end = cursor + len(tokenizer.encode(word))
-            start_time, end_time = timestamp(cursor, word_end)
-            results.append((word, start_time, end_time))
-            cursor = word_end
-        start_time, end_time = timestamp(cursor, end)
-        results.append((words[-1], start_time, end_time))
+        results.extend(
+            _decode_timestamped_span(
+                text_tokens,
+                start,
+                end,
+                tokenizer,
+                frame_rate,
+                padding_token_id,
+                offset_seconds,
+            )
+        )
 
     if boundaries.numel() == 0:
         return results
@@ -64,9 +51,122 @@ def _timestamped_words(
     return results
 
 
+def _decode_timestamped_span(
+    tokens,
+    start: int,
+    end: int,
+    tokenizer,
+    frame_rate: float,
+    padding_token_id: int,
+    offset_seconds: float,
+) -> list[tuple[str, float, float]]:
+    token_ids = tokens[start:end]
+    token_ids = token_ids[token_ids > padding_token_id]
+    words = tokenizer.decode(token_ids.tolist()).split()
+    if not words:
+        return []
+
+    def timestamp(token_start: int, token_end: int) -> tuple[float, float]:
+        return (
+            max(0.0, token_start / frame_rate - offset_seconds),
+            max(0.0, token_end / frame_rate - offset_seconds),
+        )
+
+    if len(words) == 1:
+        start_time, end_time = timestamp(start, end)
+        return [(words[0], start_time, end_time)]
+
+    results = []
+    cursor = start
+    for word in words[:-1]:
+        word_end = cursor + len(tokenizer.encode(word))
+        start_time, end_time = timestamp(cursor, word_end)
+        results.append((word, start_time, end_time))
+        cursor = word_end
+    start_time, end_time = timestamp(cursor, end)
+    results.append((words[-1], start_time, end_time))
+    return results
+
+
+class _TimestampedWordStream:
+    def __init__(
+        self,
+        tokenizer,
+        frame_rate: float,
+        padding_token_id: int,
+        offset_seconds: float,
+        on_word: Callable[[str], None],
+    ):
+        import torch
+
+        self.torch = torch
+        self.tokenizer = tokenizer
+        self.frame_rate = frame_rate
+        self.padding_token_id = padding_token_id
+        self.offset_seconds = offset_seconds
+        self.on_word = on_word
+        self.pending_tokens = torch.empty(0, dtype=torch.long)
+        self.pending_start = 0
+        self.has_boundary = False
+
+    def update(self, tokens) -> None:
+        tokens = tokens.cpu().view(-1)
+        if tokens.numel() == 0:
+            return
+        pending = self.torch.cat((self.pending_tokens, tokens))
+        while True:
+            (boundaries,) = self.torch.where(pending == 0)
+            if boundaries.numel() == 0:
+                break
+            boundary = int(boundaries[0])
+            if self.has_boundary:
+                for word, _, _ in _decode_timestamped_span(
+                    pending,
+                    0,
+                    boundary,
+                    self.tokenizer,
+                    self.frame_rate,
+                    self.padding_token_id,
+                    self.offset_seconds - self.pending_start / self.frame_rate,
+                ):
+                    self.on_word(word)
+            pending = pending[boundary + 1 :]
+            self.pending_start += boundary + 1
+            self.has_boundary = True
+        self.pending_tokens = pending
+
+    def finish(self) -> None:
+        if not self.has_boundary:
+            return
+        eos_positions = self.torch.where(
+            self.pending_tokens == self.tokenizer.eos_id()
+        )[0]
+        end = (
+            int(eos_positions[0])
+            if eos_positions.numel()
+            else min(
+                self.pending_tokens.shape[-1],
+                int(self.frame_rate),
+            )
+        )
+        for word, _, _ in _decode_timestamped_span(
+            self.pending_tokens,
+            0,
+            end,
+            self.tokenizer,
+            self.frame_rate,
+            self.padding_token_id,
+            self.offset_seconds - self.pending_start / self.frame_rate,
+        ):
+            self.on_word(word)
+
+
 class KyutaiTranscriber:
     @staticmethod
-    def transcribe(task: FileTranscriptionTask) -> List[Segment]:
+    def transcribe(
+        task: FileTranscriptionTask,
+        on_word: Callable[[str], None] | None = None,
+    ) -> List[Segment]:
         if task.transcription_options.task != Task.TRANSCRIBE:
             raise ValueError("Kyutai STT supports transcription only, not translation.")
 
@@ -166,12 +266,28 @@ class KyutaiTranscriber:
         )
 
         generated_tokens = []
+        word_stream = (
+            _TimestampedWordStream(
+                tokenizer,
+                mimi.frame_rate,
+                padding_token_id,
+                prefix_chunks / mimi.frame_rate + audio_delay,
+                on_word,
+            )
+            if on_word is not None
+            else None
+        )
         with torch.inference_mode(), mimi.streaming(1), generator.streaming(1):
             for audio_chunk in chunks:
                 audio_tokens = mimi.encode(audio_chunk)
                 text_tokens = generator.step(audio_tokens)
                 if text_tokens is not None:
                     generated_tokens.append(text_tokens)
+                    if word_stream is not None:
+                        word_stream.update(text_tokens)
+
+        if word_stream is not None:
+            word_stream.finish()
 
         if not generated_tokens:
             return []

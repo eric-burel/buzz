@@ -118,6 +118,7 @@ class WhisperFileTranscriber(FileTranscriber):
         self.recv_pipe = None
         self.send_pipe = None
         self.error_message = None
+        self.streamed_transcript = False
         # Guards the ``stopped`` / ``started_process`` pair. Without it, a
         # stop() landing while ``current_process.start()`` is still running
         # (slow on Windows, which spawns a fresh interpreter) sees
@@ -333,7 +334,19 @@ class WhisperFileTranscriber(FileTranscriber):
     def transcribe_kyutai(cls, task: FileTranscriptionTask) -> List[Segment]:
         from buzz.transcriber.kyutai import KyutaiTranscriber
 
-        return KyutaiTranscriber.transcribe(task)
+        on_word = None
+        if task.stream_transcript:
+            first_word = True
+
+            def on_word(word: str):
+                nonlocal first_word
+                prefix = "" if first_word else " "
+                first_word = False
+                sys.stderr.write(
+                    f"transcript = {json.dumps(prefix + word, ensure_ascii=True)}\n"
+                )
+
+        return KyutaiTranscriber.transcribe(task, on_word=on_word)
 
     @classmethod
     def transcribe_faster_whisper(cls, task: FileTranscriptionTask) -> List[Segment]:
@@ -541,6 +554,9 @@ class WhisperFileTranscriber(FileTranscriber):
                 break
 
             if line == self.READ_LINE_THREAD_STOP_TOKEN:
+                if self.streamed_transcript:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
                 return
 
             if line.startswith("segments = "):
@@ -555,6 +571,11 @@ class WhisperFileTranscriber(FileTranscriber):
                     for segment in segments_dict
                 ]
                 self.segments = segments
+            elif line.startswith("transcript = "):
+                text = json.loads(line[len("transcript = ") :])
+                sys.stdout.write(text)
+                sys.stdout.flush()
+                self.streamed_transcript = True
             elif line.startswith("error = "):
                 self.error_message = line[8:]
             else:

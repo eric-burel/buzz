@@ -129,6 +129,10 @@ def _add_command_options(parser: QCommandLineParser):
     vtt_option = QCommandLineOption(["vtt"], "Output result in a VTT file.")
     txt_option = QCommandLineOption("txt", "Output result in a TXT file.")
     hide_gui_option = QCommandLineOption("hide-gui", "Hide the main application window.")
+    stream_option = QCommandLineOption(
+        ["stream"],
+        "Print Kyutai transcript text to stdout as it is generated. Use only with --model-type kyutai.",
+    )
 
     parser.addOptions(
         [
@@ -150,6 +154,7 @@ def _add_command_options(parser: QCommandLineParser):
             vtt_option,
             txt_option,
             hide_gui_option,
+            stream_option,
         ]
     )
 
@@ -172,6 +177,7 @@ def _add_command_options(parser: QCommandLineParser):
         "vtt": vtt_option,
         "txt": txt_option,
         "hide_gui": hide_gui_option,
+        "stream": stream_option,
     }
 
 
@@ -211,6 +217,7 @@ def _add_transcription_tasks(
     identify_speakers: bool = False,
     speaker_count: typing.Optional[int] = None,
     speaker_diarizer: str = DEFAULT_DIARIZER,
+    stream_transcript: bool = False,
 ):
     for file_path in file_paths:
         path_is_url = is_url(file_path)
@@ -232,6 +239,7 @@ def _add_transcription_tasks(
             identify_speakers=identify_speakers,
             speaker_count=speaker_count,
             speaker_diarizer=speaker_diarizer,
+            stream_transcript=stream_transcript,
         )
         app.add_task(transcription_task, quit_on_complete=True)
 
@@ -263,6 +271,10 @@ def _handle_add_command(app: Application, parser: QCommandLineParser):
     task = parse_enum_option(opts["task"], parser, Task)
     model_type = parse_enum_option(opts["model_type"], parser, CommandLineModelType)
     model_size = parse_enum_option(opts["model_size"], parser, WhisperModelSize)
+
+    stream_transcript = parser.isSet(opts["stream"])
+    if stream_transcript and model_type != CommandLineModelType.KYUTAI:
+        raise CommandLineError("--stream is only supported with --model-type kyutai")
 
     model_path, model = _resolve_model(
         model_type,
@@ -321,6 +333,7 @@ def _handle_add_command(app: Application, parser: QCommandLineParser):
         identify_speakers=identify_speakers,
         speaker_count=speaker_count,
         speaker_diarizer=diarizer,
+        stream_transcript=stream_transcript,
     )
 
     if parser.isSet(opts["hide_gui"]):

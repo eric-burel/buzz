@@ -13,7 +13,11 @@ from buzz.model_loader import (
     TranscriptionModel,
     _kyutai_model_files,
 )
-from buzz.transcriber.kyutai import KyutaiTranscriber, _timestamped_words
+from buzz.transcriber.kyutai import (
+    KyutaiTranscriber,
+    _TimestampedWordStream,
+    _timestamped_words,
+)
 from buzz.transcriber.transcriber import Task
 
 
@@ -103,22 +107,24 @@ class TestKyutaiModelCache:
 
 
 class TestTimestampedWords:
+    class Tokenizer:
+        def decode(self, tokens):
+            return " ".join(
+                {4: "hello", 5: "world", 6: "again"}[token] for token in tokens
+            )
+
+        def encode(self, word):
+            return [word]
+
+        def eos_id(self):
+            return 2
+
     def test_decodes_words_from_delayed_token_stream(self):
-        class Tokenizer:
-            def decode(self, tokens):
-                return " ".join({4: "hello", 5: "world", 6: "again"}[token] for token in tokens)
-
-            def encode(self, word):
-                return [word]
-
-            def eos_id(self):
-                return 2
-
         tokens = torch.tensor([[[[0, 4, 5, 0, 6, 2]]]])
 
         assert _timestamped_words(
             tokens,
-            Tokenizer(),
+            self.Tokenizer(),
             frame_rate=10,
             padding_token_id=3,
             offset_seconds=0,
@@ -127,6 +133,24 @@ class TestTimestampedWords:
             ("world", 0.2, 0.3),
             ("again", 0.4, 0.5),
         ]
+
+    def test_stream_emits_closed_words_before_the_final_chunk(self):
+        words = []
+        stream = _TimestampedWordStream(
+            self.Tokenizer(),
+            frame_rate=10,
+            padding_token_id=3,
+            offset_seconds=0,
+            on_word=words.append,
+        )
+
+        stream.update(torch.tensor([0, 4]))
+        assert words == []
+        stream.update(torch.tensor([5, 0, 6]))
+        assert words == ["hello", "world"]
+        stream.finish()
+
+        assert words == ["hello", "world", "again"]
 
 
 class TestKyutaiTranscriberValidation:
